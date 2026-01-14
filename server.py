@@ -26,7 +26,9 @@ import os
 import urllib.parse
 import json
 from html import escape
-import cgi
+import re
+from email.parser import BytesParser
+from email.policy import default
 
 
 # Directory to store uploaded images
@@ -83,9 +85,9 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         html_parts.append('</head>')
         html_parts.append('<body>')
         html_parts.append('  <h1>Gental Healthy Smiles — Logo Design Feedback</h1>')
-        # Upload section
+        # Add a friendly tagline under the main heading to welcome visitors and encourage participation
         html_parts.append('  <p class="tagline">Share your best logo concepts and get gentle feedback!</p>')
-      
+        # Upload section
         html_parts.append('  <section class="upload-section">')
         html_parts.append('    <h2>Upload a New Design</h2>')
         html_parts.append('    <form action="/upload" method="post" enctype="multipart/form-data">')
@@ -130,47 +132,76 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _parse_multipart(self, body: bytes, boundary: str):
+        """Parse multipart/form-data body and return a list of (field_name, filename, content bytes) tuples."""
+        import re as _re
+        results = []
+        boundary_bytes = boundary.encode()
+        delimiter = b'--' + boundary_bytes
+        parts = body.split(delimiter)
+        for part in parts:
+            if not part or part in (b'--', b'--\r\n'):
+                continue
+            # remove leading CRLF
+            part = part.lstrip(b'\r\n')
+            # separate headers and payload
+            header, _, payload = part.partition(b'\r\n\r\n')
+            header_text = header.decode('utf-8', errors='ignore')
+            # find Content-Disposition header
+            disposition_line = ''
+            for hline in header_text.split('\r\n'):
+                if hline.lower().startswith('content-disposition'):
+                    disposition_line = hline
+                    break
+            if not disposition_line:
+                continue
+            name_match = _re.search(r'name="([^"]*)"', disposition_line)
+            field_name = name_match.group(1) if name_match else ''
+            filename_match = _re.search(r'filename="([^"]*)"', disposition_line)
+            filename = filename_match.group(1) if filename_match else None
+            content = payload.rstrip(b'\r\n')
+            results.append((field_name, filename, content))
+        return results
+
     def _handle_upload(self) -> None:
         """Handle file uploads sent via multipart/form-data."""
         # Ensure upload directory exists
         os.makedirs(UPLOAD_DIR, exist_ok=True)
-        # Parse form data using cgi.FieldStorage
-        form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
-            environ={
-                'REQUEST_METHOD': 'POST',
-                'CONTENT_TYPE': self.headers.get('Content-Type'),
-            }
-        )
-        fileitem = form.getfirst('file') or form['file']
-        if not fileitem:
+        content_type = self.headers.get('Content-Type', '')
+        if 'boundary=' not in content_type:
+            self.send_error(400, 'Invalid multipart/form-data')
+            return
+        boundary = content_type.split('boundary=')[-1]
+        # Read the request body
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length)
+        # Parse the multipart body
+        parts = self._parse_multipart(body, boundary)
+        file_part = None
+        for name, filename, content in parts:
+            if name == 'file' and filename:
+                file_part = (filename, content)
+                break
+        if not file_part:
             self.send_error(400, 'No file uploaded')
             return
-        # When using FieldStorage, fileitem can be a FieldStorage instance or a str
-        if isinstance(fileitem, cgi.FieldStorage) and fileitem.filename:
-            # Sanitise filename to prevent directory traversal
-            filename = os.path.basename(fileitem.filename)
-            name, ext = os.path.splitext(filename)
-            # Provide a unique filename if the name already exists
+        filename, file_content = file_part
+        # Sanitise filename to prevent directory traversal
+        filename = os.path.basename(filename)
+        name_root, ext = os.path.splitext(filename)
+        dest_path = os.path.join(UPLOAD_DIR, filename)
+        counter = 1
+        while os.path.exists(dest_path):
+            filename = f"{name_root}_{counter}{ext}"
             dest_path = os.path.join(UPLOAD_DIR, filename)
-            counter = 1
-            while os.path.exists(dest_path):
-                filename = f"{name}_{counter}{ext}"
-                dest_path = os.path.join(UPLOAD_DIR, filename)
-                counter += 1
-            # Write uploaded file to disk
-            with open(dest_path, 'wb') as out_file:
-                data = fileitem.file.read()
-                out_file.write(data)
-            # Update comments file to include an entry for the new design
-            comments = self._load_comments()
-            comments.setdefault(filename, [])
-            self._save_comments(comments)
-        else:
-            # Not a proper file
-            self.send_error(400, 'Invalid file upload')
-            return
+            counter += 1
+        # Write uploaded file to disk
+        with open(dest_path, 'wb') as out_file:
+            out_file.write(file_content)
+        # Update comments file to include an entry for the new design
+        comments = self._load_comments()
+        comments.setdefault(filename, [])
+        self._save_comments(comments)
         # Redirect back to index
         self.send_response(303)
         self.send_header('Location', '/')
