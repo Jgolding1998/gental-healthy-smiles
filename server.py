@@ -26,9 +26,13 @@ import os
 import urllib.parse
 import json
 from html import escape
-import re
+# NOTE: The built-in `cgi` module was removed in Python 3.13.  We
+# implement our own minimal multipart/form-data parser using the
+# `email` package so that the application can run on newer Python
+# versions without requiring the deprecated `cgi` module.
+import email
+from email import policy
 from email.parser import BytesParser
-from email.policy import default
 
 
 # Directory to store uploaded images
@@ -55,6 +59,12 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_upload()
         elif self.path == '/comment':
             self._handle_comment()
+        elif self.path == '/reply':
+            # Handle replies to existing comments
+            self._handle_reply()
+        elif self.path == '/delete':
+            # Handle deletion of an uploaded design
+            self._handle_delete()
         else:
             # Unknown POST endpoint
             self.send_error(404, 'Unknown POST endpoint')
@@ -86,7 +96,8 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         html_parts.append('<body>')
         html_parts.append('  <h1>Gental Healthy Smiles — Logo Design Feedback</h1>')
         # Add a friendly tagline under the main heading to welcome visitors and encourage participation
-        html_parts.append('  <p class="tagline">Share your best logo concepts and get gentle feedback!</p>')
+        # Update the tagline to invite visitors to view existing designs and leave gentle feedback.
+        html_parts.append('  <p class="tagline">View designs below and leave your gentle feedback.</p>')
         # Upload section
         html_parts.append('  <section class="upload-section">')
         html_parts.append('    <h2>Upload a New Design</h2>')
@@ -103,20 +114,51 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         for img in images:
             safe_filename = urllib.parse.quote(img)
             html_parts.append('    <div class="design">')
-            html_parts.append(f'      <img src="/{UPLOAD_DIR}/{safe_filename}" alt="{escape(img)}" />')
-            # Comments list
+            # Wrap the image in a link to allow viewing the file directly in a new tab
+            html_parts.append(f'      <a href="/{UPLOAD_DIR}/{safe_filename}" target="_blank"><img src="/{UPLOAD_DIR}/{safe_filename}" alt="{escape(img)}" /></a>')
+            # Comments and replies list
             html_parts.append('      <div class="comments">')
             html_parts.append('        <h3>Feedback</h3>')
-            html_parts.append('        <ul>')
-            for com in comments.get(img, []):
-                html_parts.append(f'          <li>{escape(com)}</li>')
-            html_parts.append('        </ul>')
+            # Retrieve list of comment objects (each with text and replies)
+            comment_list = comments.get(img, [])
+            if comment_list:
+                html_parts.append('        <ul>')
+                for idx, com in enumerate(comment_list):
+                    # Each comment may be a dict with text and replies
+                    if isinstance(com, dict):
+                        text = escape(com.get('text', ''))
+                        replies = com.get('replies', [])
+                    else:
+                        # Fallback: treat plain string as text
+                        text = escape(str(com))
+                        replies = []
+                    html_parts.append(f'          <li><span class="comment-text">{text}</span>')
+                    # Show replies, if any
+                    if replies:
+                        html_parts.append('            <ul class="replies">')
+                        for rep in replies:
+                            html_parts.append(f'              <li>{escape(str(rep))}</li>')
+                        html_parts.append('            </ul>')
+                    # Reply form for this comment
+                    html_parts.append('            <form action="/reply" method="post" class="reply-form">')
+                    html_parts.append(f'              <input type="hidden" name="image" value="{escape(img)}">')
+                    html_parts.append(f'              <input type="hidden" name="comment_index" value="{idx}">')
+                    html_parts.append('              <textarea name="reply" placeholder="Write a reply..." required></textarea>')
+                    html_parts.append('              <button type="submit">Reply</button>')
+                    html_parts.append('            </form>')
+                    html_parts.append('          </li>')
+                html_parts.append('        </ul>')
             html_parts.append('      </div>')
-            # Comment form
+            # Top-level comment form
             html_parts.append('      <form action="/comment" method="post" class="comment-form">')
             html_parts.append(f'        <input type="hidden" name="image" value="{escape(img)}">')
             html_parts.append('        <textarea name="comment" placeholder="Leave your feedback here..." required></textarea>')
             html_parts.append('        <button type="submit">Submit</button>')
+            html_parts.append('      </form>')
+            # Delete form to remove this design
+            html_parts.append('      <form action="/delete" method="post" class="delete-form" onsubmit="return confirm(\'Delete this design and all comments?\');">')
+            html_parts.append(f'        <input type="hidden" name="image" value="{escape(img)}">')
+            html_parts.append('        <button type="submit">Delete</button>')
             html_parts.append('      </form>')
             html_parts.append('    </div>')
         html_parts.append('  </section>')
@@ -132,72 +174,31 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def _parse_multipart(self, body: bytes, boundary: str):
-        """Parse multipart/form-data body and return a list of (field_name, filename, content bytes) tuples."""
-        import re as _re
-        results = []
-        boundary_bytes = boundary.encode()
-        delimiter = b'--' + boundary_bytes
-        parts = body.split(delimiter)
-        for part in parts:
-            if not part or part in (b'--', b'--\r\n'):
-                continue
-            # remove leading CRLF
-            part = part.lstrip(b'\r\n')
-            # separate headers and payload
-            header, _, payload = part.partition(b'\r\n\r\n')
-            header_text = header.decode('utf-8', errors='ignore')
-            # find Content-Disposition header
-            disposition_line = ''
-            for hline in header_text.split('\r\n'):
-                if hline.lower().startswith('content-disposition'):
-                    disposition_line = hline
-                    break
-            if not disposition_line:
-                continue
-            name_match = _re.search(r'name="([^"]*)"', disposition_line)
-            field_name = name_match.group(1) if name_match else ''
-            filename_match = _re.search(r'filename="([^"]*)"', disposition_line)
-            filename = filename_match.group(1) if filename_match else None
-            content = payload.rstrip(b'\r\n')
-            results.append((field_name, filename, content))
-        return results
-
     def _handle_upload(self) -> None:
         """Handle file uploads sent via multipart/form-data."""
         # Ensure upload directory exists
         os.makedirs(UPLOAD_DIR, exist_ok=True)
-        content_type = self.headers.get('Content-Type', '')
-        if 'boundary=' not in content_type:
-            self.send_error(400, 'Invalid multipart/form-data')
+        # Parse multipart form data using our custom parser
+        form = self._parse_multipart()
+        fileitem = form.get('file') or form.get('design')
+        if not fileitem or not isinstance(fileitem, dict) or 'filename' not in fileitem:
+            # Not a proper file upload
+            self.send_error(400, 'Invalid file upload')
             return
-        boundary = content_type.split('boundary=')[-1]
-        # Read the request body
-        length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(length)
-        # Parse the multipart body
-        parts = self._parse_multipart(body, boundary)
-        file_part = None
-        for name, filename, content in parts:
-            if name == 'file' and filename:
-                file_part = (filename, content)
-                break
-        if not file_part:
-            self.send_error(400, 'No file uploaded')
-            return
-        filename, file_content = file_part
         # Sanitise filename to prevent directory traversal
-        filename = os.path.basename(filename)
-        name_root, ext = os.path.splitext(filename)
+        filename = os.path.basename(fileitem['filename'])
+        name, ext = os.path.splitext(filename)
+        # Provide a unique filename if the name already exists
         dest_path = os.path.join(UPLOAD_DIR, filename)
         counter = 1
         while os.path.exists(dest_path):
-            filename = f"{name_root}_{counter}{ext}"
+            filename = f"{name}_{counter}{ext}"
             dest_path = os.path.join(UPLOAD_DIR, filename)
             counter += 1
         # Write uploaded file to disk
         with open(dest_path, 'wb') as out_file:
-            out_file.write(file_content)
+            data = fileitem['content']
+            out_file.write(data)
         # Update comments file to include an entry for the new design
         comments = self._load_comments()
         comments.setdefault(filename, [])
@@ -224,7 +225,76 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         # Load existing comments
         comments = self._load_comments()
         comments.setdefault(image, [])
-        comments[image].append(comment)
+        # Append as a comment object with text and empty replies
+        comments[image].append({"text": comment, "replies": []})
+        self._save_comments(comments)
+        # Redirect back to index
+        self.send_response(303)
+        self.send_header('Location', '/')
+        self.end_headers()
+
+    def _handle_reply(self) -> None:
+        """Handle reply submissions to existing comments."""
+        # Read the POST body
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length).decode('utf-8')
+        params = urllib.parse.parse_qs(body, keep_blank_values=True)
+        image = params.get('image', [None])[0]
+        reply_text = params.get('reply', [''])[0].strip()
+        idx_str = params.get('comment_index', [None])[0]
+        if not image or not reply_text or idx_str is None:
+            # Missing required fields; redirect
+            self.send_response(303)
+            self.send_header('Location', '/')
+            self.end_headers()
+            return
+        try:
+            idx = int(idx_str)
+        except Exception:
+            idx = -1
+        # Load existing comments
+        comments = self._load_comments()
+        # Ensure list exists
+        comment_list = comments.setdefault(image, [])
+        # If index is valid, append reply
+        if 0 <= idx < len(comment_list):
+            comment_obj = comment_list[idx]
+            if isinstance(comment_obj, dict):
+                comment_obj.setdefault('replies', [])
+                comment_obj['replies'].append(reply_text)
+            else:
+                # Upgrade plain string comment to dict format
+                comment_list[idx] = {'text': str(comment_obj), 'replies': [reply_text]}
+        # Save comments and redirect
+        self._save_comments(comments)
+        self.send_response(303)
+        self.send_header('Location', '/')
+        self.end_headers()
+
+    def _handle_delete(self) -> None:
+        """Handle deletion of an uploaded design and its comments."""
+        # Read the POST body
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length).decode('utf-8')
+        params = urllib.parse.parse_qs(body, keep_blank_values=True)
+        image = params.get('image', [None])[0]
+        if not image:
+            # Nothing to delete
+            self.send_response(303)
+            self.send_header('Location', '/')
+            self.end_headers()
+            return
+        # Delete the file from disk
+        file_path = os.path.join(UPLOAD_DIR, os.path.basename(image))
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+        # Remove comments
+        comments = self._load_comments()
+        if image in comments:
+            comments.pop(image, None)
         self._save_comments(comments)
         # Redirect back to index
         self.send_response(303)
@@ -236,7 +306,21 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         if os.path.exists(COMMENTS_FILE):
             try:
                 with open(COMMENTS_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    # Convert legacy list-of-strings format to list of comment objects
+                    for image, comment_list in list(data.items()):
+                        if isinstance(comment_list, list):
+                            new_list = []
+                            for entry in comment_list:
+                                if isinstance(entry, dict):
+                                    # Ensure keys exist
+                                    text = entry.get('text', '')
+                                    replies = entry.get('replies', [])
+                                    new_list.append({'text': text, 'replies': list(replies)})
+                                else:
+                                    new_list.append({'text': str(entry), 'replies': []})
+                            data[image] = new_list
+                    return data
             except Exception:
                 return {}
         return {}
@@ -248,6 +332,53 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
                 json.dump(data, f)
         except Exception:
             pass
+
+    def _parse_multipart(self) -> dict:
+        """
+        Parse a multipart/form-data request body into a dictionary.
+
+        This helper uses the ``email`` package to parse the raw request
+        body. Each form field is returned either as a string (for
+        regular fields) or as a dictionary with ``filename`` and
+        ``content`` keys for file uploads.
+
+        Returns an empty dict if the Content-Type header does not
+        indicate multipart/form-data.
+        """
+        ctype = self.headers.get('Content-Type', '') or ''
+        if 'multipart/form-data' not in ctype:
+            return {}
+        # Read the full request body
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length)
+        # Prepend the Content-Type header so the email parser can
+        # understand the multipart structure. The MIME-Version header is
+        # required by the parser for strict compliance.
+        header_bytes = f'Content-Type: {ctype}\r\nMIME-Version: 1.0\r\n\r\n'.encode('utf-8')
+        msg = BytesParser(policy=policy.default).parsebytes(header_bytes + body)
+        result: dict[str, object] = {}
+        # Iterate through each part of the multipart message
+        for part in msg.iter_parts():
+            disposition = part.get('Content-Disposition') or ''
+            if 'form-data' not in disposition:
+                continue
+            # Extract the form field name
+            name = part.get_param('name', header='Content-Disposition', unquote=True)
+            if not name:
+                continue
+            filename = part.get_filename()
+            payload = part.get_payload(decode=True)
+            if filename is not None:
+                # File upload: return filename and binary content
+                result[name] = {'filename': filename, 'content': payload or b''}
+            else:
+                # Regular form field: decode bytes to string
+                if isinstance(payload, (bytes, bytearray)):
+                    value = payload.decode('utf-8', errors='ignore')
+                else:
+                    value = payload
+                result[name] = value
+        return result
 
 
 def run_server(port: int = 8000) -> None:
