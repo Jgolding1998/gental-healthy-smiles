@@ -133,6 +133,71 @@ h1 {
     word-break: break-word;
 }
 
+/* Replies nested under comments */
+.replies {
+    list-style-type: disc;
+    padding-left: 1.5rem;
+    margin-top: 0.25rem;
+    font-size: 0.9rem;
+    color: #555;
+}
+
+/* Form used to submit replies to existing comments */
+.reply-form {
+    display: flex;
+    flex-direction: column;
+    margin-top: 0.25rem;
+}
+
+.reply-form textarea {
+    resize: vertical;
+    min-height: 40px;
+    max-height: 120px;
+    padding: 0.4rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-bottom: 0.4rem;
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.reply-form button {
+    align-self: flex-start;
+    background-color: #64b5f6;
+    color: #fff;
+    border: none;
+    padding: 0.35rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    font-size: 0.85rem;
+}
+
+.reply-form button:hover {
+    background-color: #4e8bd5;
+}
+
+/* Delete form and button */
+.delete-form {
+    margin-top: 0.5rem;
+    text-align: right;
+}
+
+.delete-form button {
+    background-color: #e57373;
+    color: #fff;
+    border: none;
+    padding: 0.35rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    font-size: 0.85rem;
+}
+
+.delete-form button:hover {
+    background-color: #c62828;
+}
+
 .comment-form {
     display: flex;
     flex-direction: column;
