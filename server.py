@@ -84,6 +84,8 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         html_parts.append('<body>')
         html_parts.append('  <h1>Gental Healthy Smiles — Logo Design Feedback</h1>')
         # Upload section
+        html_parts.append('  <p class="tagline">Share your best logo concepts and get gentle feedback!</p>')
+      
         html_parts.append('  <section class="upload-section">')
         html_parts.append('    <h2>Upload a New Design</h2>')
         html_parts.append('    <form action="/upload" method="post" enctype="multipart/form-data">')
