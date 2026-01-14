@@ -15,6 +15,15 @@ body {
     line-height: 1.5;
 }
 
+/* Tagline styling under the main heading */
+.tagline {
+    text-align: center;
+    margin: 0.5rem 0 1rem;
+    font-size: 1.1rem;
+    color: #1976d2;
+    font-weight: 500;
+}
+
 h1 {
     background: linear-gradient(90deg, #90caf9 0%, #64b5f6 100%);
     color: #fff;
@@ -84,6 +93,13 @@ h1 {
     flex-direction: column;
 }
 
+/* Elevate design cards slightly when hovered to add a touch of interactivity */
+.design:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    transform: translateY(-3px);
+    transition: box-shadow 0.3s ease, transform 0.3s ease;
+}
+
 .design img {
     width: 100%;
     height: auto;
@@ -96,6 +112,8 @@ h1 {
     overflow-y: auto;
     max-height: 150px;
     margin-bottom: 0.5rem;
+    border-top: 1px solid #e0e0e0;
+    padding-top: 0.5rem;
 }
 
 .comments h3 {
