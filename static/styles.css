@@ -1,5 +1,5 @@
 /*
- * Stylesheet for the Gental Healthy Smiles logo feedback site.
+ * Stylesheet for the Gentle Healthy Smiles logo feedback site.
  *
  * The colours and layout are chosen to create a calm and professional
  * feeling appropriate for a dental practice. The gallery layout
@@ -86,6 +86,15 @@ h1 {
     border-color: #64b5f6;
 }
 
+/* Message shown inside the upload section to instruct users about drag and drop */
+.drop-message {
+    font-style: italic;
+    color: #555;
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+    text-align: center;
+}
+
 .gallery {
     display: flex;
     flex-wrap: wrap;
@@ -122,6 +131,21 @@ h1 {
     height: auto;
     border-radius: 4px;
     margin-bottom: 0.5rem;
+}
+
+/* Container for multiple images within a single design */
+.design-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+.design-images a {
+    flex: 1 1 45%;
+}
+.design-images img {
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
 }
 
 .comments {
