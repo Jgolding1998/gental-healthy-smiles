@@ -78,9 +78,18 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         comments = self._load_comments()
 
-        # Gather list of image files to display
-        images = [f for f in os.listdir(UPLOAD_DIR)
-                  if os.path.isfile(os.path.join(UPLOAD_DIR, f))]
+        # Gather list of image files to display. Only include files with
+        # image extensions and skip hidden or placeholder files (e.g., .gitkeep).
+        allowed_exts = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'}
+        images = []
+        for f in os.listdir(UPLOAD_DIR):
+            path = os.path.join(UPLOAD_DIR, f)
+            # Skip directories and hidden files
+            if not os.path.isfile(path) or f.startswith('.'):
+                continue
+            ext = os.path.splitext(f)[1].lower()
+            if ext in allowed_exts:
+                images.append(f)
         images.sort()
 
         # Build the HTML structure
@@ -101,16 +110,19 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         # Upload section
         html_parts.append('  <section class="upload-section">')
         html_parts.append('    <h2>Upload a New Design</h2>')
+        # Standard file picker allows selecting multiple images
         html_parts.append('    <form action="/upload" method="post" enctype="multipart/form-data">')
-        html_parts.append('      <input type="file" name="file" accept="image/*" required>')
+        html_parts.append('      <input type="file" name="file" accept="image/*" multiple required>')
         html_parts.append('      <button type="submit">Upload</button>')
         html_parts.append('    </form>')
+        # Drag‑and‑drop zone; users can drop multiple files here
+        html_parts.append('    <div id="drop-zone">Drag & drop files here</div>')
         html_parts.append('  </section>')
 
         # Gallery of designs
         html_parts.append('  <section class="gallery">')
         if not images:
-            html_parts.append('    <p class="no-designs">No designs uploaded yet. Use the form above to add the first logo design.</p>')
+            html_parts.append('    <p class="no-designs">No designs uploaded yet. Use the form above or drag files into the drop zone to add the first logo design.</p>')
         for img in images:
             safe_filename = urllib.parse.quote(img)
             html_parts.append('    <div class="design">')
@@ -162,6 +174,36 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
             html_parts.append('      </form>')
             html_parts.append('    </div>')
         html_parts.append('  </section>')
+        # Client‑side script to enable drag‑and‑drop uploads. The script
+        # listens for drag events on the drop zone and submits dropped
+        # files via Fetch API. When the upload completes the page
+        # reloads to show the new designs.
+        html_parts.append('    <script>')
+        html_parts.append('      (function() {')
+        html_parts.append('        const dropZone = document.getElementById(\'drop-zone\');')
+        html_parts.append('        if (dropZone) {')
+        html_parts.append('          dropZone.addEventListener(\'dragover\', function(e) {')
+        html_parts.append('            e.preventDefault();')
+        html_parts.append('            dropZone.classList.add(\'dragover\');')
+        html_parts.append('          });')
+        html_parts.append('          dropZone.addEventListener(\'dragleave\', function() {')
+        html_parts.append('            dropZone.classList.remove(\'dragover\');')
+        html_parts.append('          });')
+        html_parts.append('          dropZone.addEventListener(\'drop\', function(e) {')
+        html_parts.append('            e.preventDefault();')
+        html_parts.append('            dropZone.classList.remove(\'dragover\');')
+        html_parts.append('            const files = e.dataTransfer.files;')
+        html_parts.append('            if (!files || files.length === 0) return;')
+        html_parts.append('            const formData = new FormData();')
+        html_parts.append('            for (let i = 0; i < files.length; i++) {')
+        html_parts.append('              formData.append(\'file\', files[i]);')
+        html_parts.append('            }')
+        html_parts.append('            fetch(\'/upload\', { method: \'POST\', body: formData })\n')
+        html_parts.append('              .then(() => { window.location.reload(); });')
+        html_parts.append('          });')
+        html_parts.append('        }')
+        html_parts.append('      })();')
+        html_parts.append('    </script>')
         html_parts.append('</body>')
         html_parts.append('</html>')
 
@@ -180,28 +222,42 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         # Parse multipart form data using our custom parser
         form = self._parse_multipart()
-        fileitem = form.get('file') or form.get('design')
-        if not fileitem or not isinstance(fileitem, dict) or 'filename' not in fileitem:
-            # Not a proper file upload
-            self.send_error(400, 'Invalid file upload')
+        # Support multiple file uploads. The file field may be a list or a single entry.
+        file_entries = form.get('file') or form.get('design')
+        if not file_entries:
+            self.send_error(400, 'No file(s) provided')
             return
-        # Sanitise filename to prevent directory traversal
-        filename = os.path.basename(fileitem['filename'])
-        name, ext = os.path.splitext(filename)
-        # Provide a unique filename if the name already exists
-        dest_path = os.path.join(UPLOAD_DIR, filename)
-        counter = 1
-        while os.path.exists(dest_path):
-            filename = f"{name}_{counter}{ext}"
-            dest_path = os.path.join(UPLOAD_DIR, filename)
-            counter += 1
-        # Write uploaded file to disk
-        with open(dest_path, 'wb') as out_file:
-            data = fileitem['content']
-            out_file.write(data)
-        # Update comments file to include an entry for the new design
+        # Normalise to list
+        if isinstance(file_entries, list):
+            files = file_entries
+        else:
+            files = [file_entries]
         comments = self._load_comments()
-        comments.setdefault(filename, [])
+        for fileitem in files:
+            # Each fileitem should be a dict with filename and content
+            if not isinstance(fileitem, dict) or 'filename' not in fileitem:
+                continue
+            # Sanitise filename to prevent directory traversal
+            filename = os.path.basename(fileitem['filename'])
+            name, ext = os.path.splitext(filename)
+            # Provide a unique filename if the name already exists
+            dest_path = os.path.join(UPLOAD_DIR, filename)
+            counter = 1
+            while os.path.exists(dest_path):
+                filename = f"{name}_{counter}{ext}"
+                dest_path = os.path.join(UPLOAD_DIR, filename)
+                counter += 1
+            # Write uploaded file to disk
+            try:
+                with open(dest_path, 'wb') as out_file:
+                    data = fileitem.get('content', b'')
+                    out_file.write(data)
+            except Exception:
+                # Skip file if write fails
+                continue
+            # Initialize comments for this design if not already present
+            comments.setdefault(filename, [])
+        # Save updated comments
         self._save_comments(comments)
         # Redirect back to index
         self.send_response(303)
@@ -368,16 +424,23 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
                 continue
             filename = part.get_filename()
             payload = part.get_payload(decode=True)
+            # Determine the item (file dict or string)
             if filename is not None:
-                # File upload: return filename and binary content
-                result[name] = {'filename': filename, 'content': payload or b''}
+                item: object = {'filename': filename, 'content': payload or b''}
             else:
-                # Regular form field: decode bytes to string
                 if isinstance(payload, (bytes, bytearray)):
-                    value = payload.decode('utf-8', errors='ignore')
+                    item = payload.decode('utf-8', errors='ignore')
                 else:
-                    value = payload
-                result[name] = value
+                    item = payload
+            # If the field name already exists, convert to list to support multiple entries
+            if name in result:
+                existing = result[name]
+                if isinstance(existing, list):
+                    existing.append(item)
+                else:
+                    result[name] = [existing, item]
+            else:
+                result[name] = item
         return result
 
 
