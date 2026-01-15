@@ -122,8 +122,12 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
             # Display all images associated with this design
             html_parts.append('      <div class="design-images">')
             for img in images:
+                # Wrap each image in a link that triggers the lightbox. Use javascript:void(0) as href to prevent navigation.
                 safe_filename = urllib.parse.quote(img)
-                html_parts.append(f'        <a href="/{UPLOAD_DIR}/{safe_filename}" target="_blank"><img src="/{UPLOAD_DIR}/{safe_filename}" alt="{escape(img)}" /></a>')
+                img_src = f'/{UPLOAD_DIR}/{safe_filename}'
+                html_parts.append(
+                    f'        <a href="javascript:void(0)" onclick="openLightbox(\'{img_src}\')"><img src="{img_src}" alt="{escape(img)}" /></a>'
+                )
             html_parts.append('      </div>')
             # Comments and replies
             html_parts.append('      <div class="comments">')
@@ -162,7 +166,11 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
             html_parts.append('      </form>')
             html_parts.append('    </div>')
         html_parts.append('  </section>')
-        # Include a small script to handle drag & drop events for the upload zone
+        # Lightbox overlay for viewing images individually
+        html_parts.append('<div id="lightbox" class="lightbox" onclick="closeLightbox()">')
+        html_parts.append('  <img id="lightbox-img" src="" alt="Full Image" />')
+        html_parts.append('</div>')
+        # Include a small script to handle drag & drop events and lightbox functions
         html_parts.append('<script>')
         html_parts.append('  const dropZone = document.getElementById("drop-zone");')
         html_parts.append('  const fileInput = dropZone.querySelector("input[type=file]");')
@@ -173,6 +181,16 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         html_parts.append('    const files = e.dataTransfer.files;')
         html_parts.append('    if (files.length) { fileInput.files = files; document.getElementById("upload-form").submit(); }')
         html_parts.append('  });')
+        # Lightbox functions: open and close
+        html_parts.append('  function openLightbox(src) {')
+        html_parts.append('    const lb = document.getElementById("lightbox");')
+        html_parts.append('    const img = document.getElementById("lightbox-img");')
+        html_parts.append('    img.src = src;')
+        html_parts.append('    lb.style.display = "flex";')
+        html_parts.append('  }')
+        html_parts.append('  function closeLightbox() {')
+        html_parts.append('    document.getElementById("lightbox").style.display = "none";')
+        html_parts.append('  }')
         html_parts.append('</script>')
         html_parts.append('</body>')
         html_parts.append('</html>')
