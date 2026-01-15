@@ -46,13 +46,13 @@ h1 {
 
 .upload-section form {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 0.5rem;
     align-items: center;
 }
 
 .upload-section input[type="file"] {
-    flex: 1 1 200px;
+    display: none;x;
 }
 
 .upload-section button {
@@ -84,7 +84,20 @@ h1 {
 #drop-zone.dragover {
     background-color: #bbdefb;
     border-color: #64b5f6;
+}#drop-zone span {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    background-color: #1976d2;
+    color: #fff;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s ease-in-out;
 }
+
+#drop-zone span:hover {
+    background-color: #1565c0;
+}
+
 
 /* Message shown inside the upload section to instruct users about drag and drop */
 .drop-message {
