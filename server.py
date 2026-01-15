@@ -38,8 +38,14 @@ from email.parser import BytesParser
 # Directory to store uploaded images
 UPLOAD_DIR = 'uploads'
 
-# Path to the JSON file that records comments for each image
-COMMENTS_FILE = 'comments.json'
+# Path to the JSON file that records designs (images and comments).
+# We continue to use the same file name for backward compatibility with
+# earlier versions that stored comments keyed by filename. In the new
+# structure, each key corresponds to a design and stores a list of
+# images and a list of comments.
+DATA_FILE = 'comments.json'
+
+import uuid
 
 
 class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
@@ -74,86 +80,68 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
     # ------------------------------------------------------------------
     def _serve_index(self) -> None:
         """Dynamically build and send the index page showing all designs."""
-        # Ensure directories and comment data exist
+        # Ensure required directories and data exist
         os.makedirs(UPLOAD_DIR, exist_ok=True)
-        comments = self._load_comments()
-
-        # Gather list of image files to display. Only include files with
-        # image extensions and skip hidden or placeholder files (e.g., .gitkeep).
-        allowed_exts = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'}
-        images = []
-        for f in os.listdir(UPLOAD_DIR):
-            path = os.path.join(UPLOAD_DIR, f)
-            # Skip directories and hidden files
-            if not os.path.isfile(path) or f.startswith('.'):
-                continue
-            ext = os.path.splitext(f)[1].lower()
-            if ext in allowed_exts:
-                images.append(f)
-        images.sort()
+        designs = self._load_designs()
 
         # Build the HTML structure
-        html_parts = []
+        html_parts: list[str] = []
         html_parts.append('<!DOCTYPE html>')
         html_parts.append('<html lang="en">')
         html_parts.append('<head>')
         html_parts.append('  <meta charset="UTF-8">')
         html_parts.append('  <meta name="viewport" content="width=device-width, initial-scale=1.0">')
-        html_parts.append('  <title>Gental Healthy Smiles - Logo Feedback</title>')
+        html_parts.append('  <title>Gentle Healthy Smiles - Logo Feedback</title>')
         html_parts.append('  <link rel="stylesheet" href="/static/styles.css">')
         html_parts.append('</head>')
         html_parts.append('<body>')
-        html_parts.append('  <h1>Gental Healthy Smiles — Logo Design Feedback</h1>')
-        # Add a friendly tagline under the main heading to welcome visitors and encourage participation
-        # Update the tagline to invite visitors to view existing designs and leave gentle feedback.
+        html_parts.append('  <h1>Gentle Healthy Smiles — Logo Design Feedback</h1>')
+        # Friendly tagline
         html_parts.append('  <p class="tagline">View designs below and leave your gentle feedback.</p>')
-        # Upload section
+        # Upload section with multiple file support and drag-and-drop zone
         html_parts.append('  <section class="upload-section">')
         html_parts.append('    <h2>Upload a New Design</h2>')
-        # Standard file picker allows selecting multiple images
-        html_parts.append('    <form action="/upload" method="post" enctype="multipart/form-data">')
-        html_parts.append('      <input type="file" name="file" accept="image/*" multiple required>')
+        html_parts.append('    <form action="/upload" method="post" enctype="multipart/form-data" id="upload-form">')
+        html_parts.append('      <label id="drop-zone">')
+        html_parts.append('        <span>Choose Files</span>')
+        html_parts.append('        <input type="file" name="file" accept="image/*" multiple required>')
+        html_parts.append('      </label>')
         html_parts.append('      <button type="submit">Upload</button>')
+        html_parts.append('      <p class="drop-message">Drag & drop files here</p>')
         html_parts.append('    </form>')
-        # Drag‑and‑drop zone; users can drop multiple files here
-        html_parts.append('    <div id="drop-zone">Drag & drop files here</div>')
         html_parts.append('  </section>')
-
         # Gallery of designs
         html_parts.append('  <section class="gallery">')
-        if not images:
+        if not designs:
             html_parts.append('    <p class="no-designs">No designs uploaded yet. Use the form above or drag files into the drop zone to add the first logo design.</p>')
-        for img in images:
-            safe_filename = urllib.parse.quote(img)
+        # Iterate through designs; sort by key for determinism
+        for design_id, record in designs.items():
+            images = record.get('images', [])
+            comments = record.get('comments', [])
             html_parts.append('    <div class="design">')
-            # Wrap the image in a link to allow viewing the file directly in a new tab
-            html_parts.append(f'      <a href="/{UPLOAD_DIR}/{safe_filename}" target="_blank"><img src="/{UPLOAD_DIR}/{safe_filename}" alt="{escape(img)}" /></a>')
-            # Comments and replies list
+            # Display all images associated with this design
+            html_parts.append('      <div class="design-images">')
+            for img in images:
+                safe_filename = urllib.parse.quote(img)
+                html_parts.append(f'        <a href="/{UPLOAD_DIR}/{safe_filename}" target="_blank"><img src="/{UPLOAD_DIR}/{safe_filename}" alt="{escape(img)}" /></a>')
+            html_parts.append('      </div>')
+            # Comments and replies
             html_parts.append('      <div class="comments">')
             html_parts.append('        <h3>Feedback</h3>')
-            # Retrieve list of comment objects (each with text and replies)
-            comment_list = comments.get(img, [])
-            if comment_list:
+            if comments:
                 html_parts.append('        <ul>')
-                for idx, com in enumerate(comment_list):
-                    # Each comment may be a dict with text and replies
-                    if isinstance(com, dict):
-                        text = escape(com.get('text', ''))
-                        replies = com.get('replies', [])
-                    else:
-                        # Fallback: treat plain string as text
-                        text = escape(str(com))
-                        replies = []
+                for idx, com in enumerate(comments):
+                    text = escape(com.get('text', ''))
+                    replies = com.get('replies', [])
                     html_parts.append(f'          <li><span class="comment-text">{text}</span>')
-                    # Show replies, if any
                     if replies:
                         html_parts.append('            <ul class="replies">')
                         for rep in replies:
                             html_parts.append(f'              <li>{escape(str(rep))}</li>')
                         html_parts.append('            </ul>')
-                    # Reply form for this comment
+                    # Reply form
                     html_parts.append('            <form action="/reply" method="post" class="reply-form">')
-                    html_parts.append(f'              <input type="hidden" name="image" value="{escape(img)}">')
+                    html_parts.append(f'              <input type="hidden" name="design_id" value="{escape(design_id)}">')
                     html_parts.append(f'              <input type="hidden" name="comment_index" value="{idx}">')
                     html_parts.append('              <textarea name="reply" placeholder="Write a reply..." required></textarea>')
                     html_parts.append('              <button type="submit">Reply</button>')
@@ -163,53 +151,35 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
             html_parts.append('      </div>')
             # Top-level comment form
             html_parts.append('      <form action="/comment" method="post" class="comment-form">')
-            html_parts.append(f'        <input type="hidden" name="image" value="{escape(img)}">')
+            html_parts.append(f'        <input type="hidden" name="design_id" value="{escape(design_id)}">')
             html_parts.append('        <textarea name="comment" placeholder="Leave your feedback here..." required></textarea>')
             html_parts.append('        <button type="submit">Submit</button>')
             html_parts.append('      </form>')
-            # Delete form to remove this design
+            # Delete form
             html_parts.append('      <form action="/delete" method="post" class="delete-form" onsubmit="return confirm(\'Delete this design and all comments?\');">')
-            html_parts.append(f'        <input type="hidden" name="image" value="{escape(img)}">')
+            html_parts.append(f'        <input type="hidden" name="design_id" value="{escape(design_id)}">')
             html_parts.append('        <button type="submit">Delete</button>')
             html_parts.append('      </form>')
             html_parts.append('    </div>')
         html_parts.append('  </section>')
-        # Client‑side script to enable drag‑and‑drop uploads. The script
-        # listens for drag events on the drop zone and submits dropped
-        # files via Fetch API. When the upload completes the page
-        # reloads to show the new designs.
-        html_parts.append('    <script>')
-        html_parts.append('      (function() {')
-        html_parts.append('        const dropZone = document.getElementById(\'drop-zone\');')
-        html_parts.append('        if (dropZone) {')
-        html_parts.append('          dropZone.addEventListener(\'dragover\', function(e) {')
-        html_parts.append('            e.preventDefault();')
-        html_parts.append('            dropZone.classList.add(\'dragover\');')
-        html_parts.append('          });')
-        html_parts.append('          dropZone.addEventListener(\'dragleave\', function() {')
-        html_parts.append('            dropZone.classList.remove(\'dragover\');')
-        html_parts.append('          });')
-        html_parts.append('          dropZone.addEventListener(\'drop\', function(e) {')
-        html_parts.append('            e.preventDefault();')
-        html_parts.append('            dropZone.classList.remove(\'dragover\');')
-        html_parts.append('            const files = e.dataTransfer.files;')
-        html_parts.append('            if (!files || files.length === 0) return;')
-        html_parts.append('            const formData = new FormData();')
-        html_parts.append('            for (let i = 0; i < files.length; i++) {')
-        html_parts.append('              formData.append(\'file\', files[i]);')
-        html_parts.append('            }')
-        html_parts.append('            fetch(\'/upload\', { method: \'POST\', body: formData })\n')
-        html_parts.append('              .then(() => { window.location.reload(); });')
-        html_parts.append('          });')
-        html_parts.append('        }')
-        html_parts.append('      })();')
-        html_parts.append('    </script>')
+        # Include a small script to handle drag & drop events for the upload zone
+        html_parts.append('<script>')
+        html_parts.append('  const dropZone = document.getElementById("drop-zone");')
+        html_parts.append('  const fileInput = dropZone.querySelector("input[type=file]");')
+        html_parts.append('  dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });')
+        html_parts.append('  dropZone.addEventListener("dragleave", () => { dropZone.classList.remove("dragover"); });')
+        html_parts.append('  dropZone.addEventListener("drop", (e) => {')
+        html_parts.append('    e.preventDefault(); dropZone.classList.remove("dragover");')
+        html_parts.append('    const files = e.dataTransfer.files;')
+        html_parts.append('    if (files.length) { fileInput.files = files; document.getElementById("upload-form").submit(); }')
+        html_parts.append('  });')
+        html_parts.append('</script>')
         html_parts.append('</body>')
         html_parts.append('</html>')
 
         html_content = '\n'.join(html_parts)
         encoded = html_content.encode('utf-8')
-        # Send HTTP response
+        # Send response
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(encoded)))
@@ -217,73 +187,99 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def _handle_upload(self) -> None:
-        """Handle file uploads sent via multipart/form-data."""
+        """Handle file uploads sent via multipart/form-data.
+
+        This handler supports uploading multiple image files at once. All
+        files uploaded in the same request are grouped into a single
+        design. A unique design identifier is generated and the
+        uploaded files are saved into the ``uploads`` directory. The
+        design metadata (image list and empty comments list) is stored
+        in the JSON data file.
+        """
         # Ensure upload directory exists
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         # Parse multipart form data using our custom parser
         form = self._parse_multipart()
-        # Support multiple file uploads. The file field may be a list or a single entry.
-        file_entries = form.get('file') or form.get('design')
-        if not file_entries:
-            self.send_error(400, 'No file(s) provided')
+        file_field = form.get('file') or form.get('design')
+        if not file_field:
+            self.send_error(400, 'No file provided')
             return
-        # Normalise to list
-        if isinstance(file_entries, list):
-            files = file_entries
+        # Normalise to a list of file items (dicts)
+        if isinstance(file_field, list):
+            fileitems = file_field
         else:
-            files = [file_entries]
-        comments = self._load_comments()
-        for fileitem in files:
-            # Each fileitem should be a dict with filename and content
-            if not isinstance(fileitem, dict) or 'filename' not in fileitem:
-                continue
-            # Sanitise filename to prevent directory traversal
-            filename = os.path.basename(fileitem['filename'])
-            name, ext = os.path.splitext(filename)
-            # Provide a unique filename if the name already exists
-            dest_path = os.path.join(UPLOAD_DIR, filename)
+            fileitems = [file_field]
+        # Filter out items that lack filename
+        fileitems = [fi for fi in fileitems if isinstance(fi, dict) and fi.get('filename')]
+        if not fileitems:
+            self.send_error(400, 'Invalid file upload')
+            return
+        # Generate a design identifier based on the first file's base name
+        first_filename = os.path.basename(fileitems[0]['filename'])
+        base_name, _ = os.path.splitext(first_filename)
+        # Clean base_name to remove problematic characters
+        base_slug = ''.join(ch for ch in base_name if ch.isalnum() or ch in ('-', '_')).strip('_-') or 'design'
+        designs = self._load_designs()
+        design_id = base_slug
+        suffix = 1
+        while design_id in designs:
+            design_id = f"{base_slug}_{suffix}"
+            suffix += 1
+        saved_images: list[str] = []
+        # Save each uploaded file to disk, ensuring unique filenames
+        for fi in fileitems:
+            raw_filename = os.path.basename(fi['filename'])
+            name, ext = os.path.splitext(raw_filename)
+            dest_filename = raw_filename
             counter = 1
-            while os.path.exists(dest_path):
-                filename = f"{name}_{counter}{ext}"
-                dest_path = os.path.join(UPLOAD_DIR, filename)
+            while os.path.exists(os.path.join(UPLOAD_DIR, dest_filename)):
+                dest_filename = f"{name}_{counter}{ext}"
                 counter += 1
-            # Write uploaded file to disk
+            dest_path = os.path.join(UPLOAD_DIR, dest_filename)
             try:
                 with open(dest_path, 'wb') as out_file:
-                    data = fileitem.get('content', b'')
-                    out_file.write(data)
+                    out_file.write(fi.get('content') or b'')
             except Exception:
-                # Skip file if write fails
+                # Skip file if cannot write
                 continue
-            # Initialize comments for this design if not already present
-            comments.setdefault(filename, [])
-        # Save updated comments
-        self._save_comments(comments)
+            saved_images.append(dest_filename)
+        # Only record design if at least one file was saved
+        if saved_images:
+            designs[design_id] = {
+                'images': saved_images,
+                'comments': []
+            }
+            self._save_designs(designs)
         # Redirect back to index
         self.send_response(303)
         self.send_header('Location', '/')
         self.end_headers()
 
     def _handle_comment(self) -> None:
-        """Handle comment submissions from regular form encoding."""
-        # Read the POST body
+        """Handle top-level comment submissions for a design."""
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length).decode('utf-8')
         params = urllib.parse.parse_qs(body, keep_blank_values=True)
-        image = params.get('image', [None])[0]
+        design_id = params.get('design_id', [None])[0]
         comment = params.get('comment', [''])[0].strip()
-        if not image or not comment:
-            # Either image or comment is missing; redirect without saving
+        if not design_id or not comment:
+            # Missing required fields; redirect without saving
             self.send_response(303)
             self.send_header('Location', '/')
             self.end_headers()
             return
-        # Load existing comments
-        comments = self._load_comments()
-        comments.setdefault(image, [])
-        # Append as a comment object with text and empty replies
-        comments[image].append({"text": comment, "replies": []})
-        self._save_comments(comments)
+        designs = self._load_designs()
+        record = designs.get(design_id)
+        if record is None:
+            # Design not found; just redirect
+            self.send_response(303)
+            self.send_header('Location', '/')
+            self.end_headers()
+            return
+        # Append new comment object
+        record.setdefault('comments', [])
+        record['comments'].append({'text': comment, 'replies': []})
+        self._save_designs(designs)
         # Redirect back to index
         self.send_response(303)
         self.send_header('Location', '/')
@@ -291,14 +287,13 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
 
     def _handle_reply(self) -> None:
         """Handle reply submissions to existing comments."""
-        # Read the POST body
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length).decode('utf-8')
         params = urllib.parse.parse_qs(body, keep_blank_values=True)
-        image = params.get('image', [None])[0]
+        design_id = params.get('design_id', [None])[0]
         reply_text = params.get('reply', [''])[0].strip()
         idx_str = params.get('comment_index', [None])[0]
-        if not image or not reply_text or idx_str is None:
+        if not design_id or not reply_text or idx_str is None:
             # Missing required fields; redirect
             self.send_response(303)
             self.send_header('Location', '/')
@@ -308,50 +303,51 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
             idx = int(idx_str)
         except Exception:
             idx = -1
-        # Load existing comments
-        comments = self._load_comments()
-        # Ensure list exists
-        comment_list = comments.setdefault(image, [])
-        # If index is valid, append reply
-        if 0 <= idx < len(comment_list):
-            comment_obj = comment_list[idx]
+        designs = self._load_designs()
+        record = designs.get(design_id)
+        if not record:
+            # Design not found
+            self.send_response(303)
+            self.send_header('Location', '/')
+            self.end_headers()
+            return
+        comments = record.setdefault('comments', [])
+        if 0 <= idx < len(comments):
+            comment_obj = comments[idx]
             if isinstance(comment_obj, dict):
                 comment_obj.setdefault('replies', [])
                 comment_obj['replies'].append(reply_text)
             else:
-                # Upgrade plain string comment to dict format
-                comment_list[idx] = {'text': str(comment_obj), 'replies': [reply_text]}
-        # Save comments and redirect
-        self._save_comments(comments)
+                comments[idx] = {'text': str(comment_obj), 'replies': [reply_text]}
+        self._save_designs(designs)
         self.send_response(303)
         self.send_header('Location', '/')
         self.end_headers()
 
     def _handle_delete(self) -> None:
         """Handle deletion of an uploaded design and its comments."""
-        # Read the POST body
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length).decode('utf-8')
         params = urllib.parse.parse_qs(body, keep_blank_values=True)
-        image = params.get('image', [None])[0]
-        if not image:
+        design_id = params.get('design_id', [None])[0]
+        if not design_id:
             # Nothing to delete
             self.send_response(303)
             self.send_header('Location', '/')
             self.end_headers()
             return
-        # Delete the file from disk
-        file_path = os.path.join(UPLOAD_DIR, os.path.basename(image))
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        except Exception:
-            pass
-        # Remove comments
-        comments = self._load_comments()
-        if image in comments:
-            comments.pop(image, None)
-        self._save_comments(comments)
+        designs = self._load_designs()
+        record = designs.pop(design_id, None)
+        if record:
+            # Delete associated image files
+            for img in record.get('images', []):
+                path = os.path.join(UPLOAD_DIR, os.path.basename(img))
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except Exception:
+                    pass
+            self._save_designs(designs)
         # Redirect back to index
         self.send_response(303)
         self.send_header('Location', '/')
@@ -385,6 +381,68 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
         """Persist comments dictionary to disk as JSON."""
         try:
             with open(COMMENTS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Design data helpers (new format)
+    # ------------------------------------------------------------------
+    def _load_designs(self) -> dict:
+        """
+        Load design data from disk. The return value is a dictionary
+        mapping design identifiers to a record containing a list of
+        image filenames and a list of comment objects. Comment objects
+        contain a ``text`` field and a list of ``replies``.
+
+        Backwards compatibility: If the file contains the old format
+        (mapping from image filename to a list of comments), it will
+        automatically be converted to the new format on load.
+        """
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                    raw = json.load(f)
+            except Exception:
+                return {}
+            designs: dict[str, dict] = {}
+            for key, value in raw.items():
+                # If value already has 'images', assume new format
+                if isinstance(value, dict) and 'images' in value:
+                    # Ensure nested comments have correct structure
+                    images = value.get('images', [])
+                    comments_list = value.get('comments', [])
+                    new_comments = []
+                    for entry in comments_list:
+                        if isinstance(entry, dict):
+                            text = entry.get('text', '')
+                            replies = list(entry.get('replies', []))
+                        else:
+                            text = str(entry)
+                            replies = []
+                        new_comments.append({'text': text, 'replies': replies})
+                    designs[key] = {'images': list(images), 'comments': new_comments}
+                else:
+                    # Old format: key is filename, value is list of comments
+                    img = key
+                    comments_list = value if isinstance(value, list) else []
+                    new_comments = []
+                    for entry in comments_list:
+                        if isinstance(entry, dict):
+                            text = entry.get('text', '')
+                            replies = list(entry.get('replies', []))
+                        else:
+                            text = str(entry)
+                            replies = []
+                        new_comments.append({'text': text, 'replies': replies})
+                    designs[img] = {'images': [img], 'comments': new_comments}
+            return designs
+        return {}
+
+    def _save_designs(self, data: dict) -> None:
+        """Persist design data to disk as JSON."""
+        try:
+            with open(DATA_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f)
         except Exception:
             pass
@@ -424,23 +482,26 @@ class LogoFeedbackHandler(http.server.SimpleHTTPRequestHandler):
                 continue
             filename = part.get_filename()
             payload = part.get_payload(decode=True)
-            # Determine the item (file dict or string)
             if filename is not None:
+                # File upload: dictionary with filename and binary content
                 item: object = {'filename': filename, 'content': payload or b''}
             else:
+                # Regular form field: decode bytes to string
                 if isinstance(payload, (bytes, bytearray)):
-                    item = payload.decode('utf-8', errors='ignore')
+                    value = payload.decode('utf-8', errors='ignore')
                 else:
-                    item = payload
-            # If the field name already exists, convert to list to support multiple entries
-            if name in result:
-                existing = result[name]
-                if isinstance(existing, list):
-                    existing.append(item)
-                else:
-                    result[name] = [existing, item]
-            else:
+                    value = payload
+                item = value
+            # Accumulate multiple entries for the same field name
+            existing = result.get(name)
+            if existing is None:
                 result[name] = item
+            else:
+                # If a previous value exists, convert to list and append
+                if not isinstance(existing, list):
+                    result[name] = [existing, item]
+                else:
+                    existing.append(item)
         return result
 
 
