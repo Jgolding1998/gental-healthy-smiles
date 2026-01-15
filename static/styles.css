@@ -44,15 +44,20 @@ h1 {
     margin-top: 0;
 }
 
+/* Layout the upload form vertically so the drop zone, submit button and help text
+   stack nicely on narrow screens.  A vertical layout also prevents the
+   drag‑and‑drop zone from being cramped next to the submit button. */
 .upload-section form {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
     align-items: center;
+    gap: 0.5rem;
 }
 
+/* Hide the actual file input so that only the styled label is visible.  The
+   input remains functional because clicking the label triggers the input. */
 .upload-section input[type="file"] {
-    display: none;x;
+    display: none;
 }
 
 .upload-section button {
@@ -84,20 +89,19 @@ h1 {
 #drop-zone.dragover {
     background-color: #bbdefb;
     border-color: #64b5f6;
-}#drop-zone span {
+}
+
+/* Style the clickable area inside the drop zone.  This span looks like a
+   button to choose files, improving the visual appeal of the upload
+   section. */
+#drop-zone span {
     display: inline-block;
     padding: 0.5rem 1rem;
     background-color: #1976d2;
     color: #fff;
     border-radius: 4px;
-    cursor: pointer;
-    transition: background-color 0.2s ease-in-out;
+    margin-bottom: 0.5rem;
 }
-
-#drop-zone span:hover {
-    background-color: #1565c0;
-}
-
 
 /* Message shown inside the upload section to instruct users about drag and drop */
 .drop-message {
@@ -106,6 +110,25 @@ h1 {
     font-size: 0.9rem;
     margin-top: 0.5rem;
     text-align: center;
+}
+
+/* Lightbox overlay for viewing images individually */
+.lightbox {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+.lightbox img {
+    max-width: 90%;
+    max-height: 90%;
+    border-radius: 4px;
 }
 
 .gallery {
