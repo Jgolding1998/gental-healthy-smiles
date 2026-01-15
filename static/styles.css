@@ -69,6 +69,23 @@ h1 {
     background-color: #115293;
 }
 
+/* Drag and drop zone styling */
+#drop-zone {
+    margin-top: 0.75rem;
+    border: 2px dashed #90caf9;
+    background-color: #e3f2fd;
+    padding: 1rem;
+    text-align: center;
+    border-radius: 6px;
+    color: #1976d2;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+#drop-zone.dragover {
+    background-color: #bbdefb;
+    border-color: #64b5f6;
+}
+
 .gallery {
     display: flex;
     flex-wrap: wrap;
